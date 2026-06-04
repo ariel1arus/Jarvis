@@ -4,7 +4,7 @@ import { env } from '@/lib/env'
 import type { AgentInput } from './types'
 import { buildSystemPrompt } from './prompts/system'
 import { reflectionSafetyCheck } from './safety'
-import { sanitiseForModel } from '@/lib/safety'
+import { sanitiseForModel, detectPII } from '@/lib/safety'
 import {
   getEmbedding,
   retrieveMemories,
@@ -12,12 +12,7 @@ import {
   evictExpired,
   storeMemory,
 } from '@/memory'
-
-// Phase 4: inject memory context into the system prompt and persist
-// the assistant response as an episodic memory.
-// Phase 5: safety pre-check intercepts distress before any model call in
-// REFLECTION mode; user input is sanitised before it reaches the model.
-// Phase 6 will add the tool-calling loop for RESEARCH mode.
+import { webSearchTool } from './tools/webSearch'
 
 /**
  * Anything `runJarvis` returns must expose `toTextStreamResponse()` so the
@@ -78,6 +73,8 @@ export async function runJarvis({
 
   const system = buildSystemPrompt(mode, memoryContext || undefined)
 
+  const isResearch = mode === 'RESEARCH'
+
   return streamText({
     model: openai(env.OPENAI_MODEL),
     system,
@@ -85,13 +82,24 @@ export async function runJarvis({
     messages: messages as NonNullable<Parameters<typeof streamText>[0]['messages']>,
     maxRetries: 3,
     abortSignal: AbortSignal.timeout(30_000),
-    // tools are intentionally omitted — REFLECTION and CHAT receive none;
-    // Phase 6 adds tool-calling for RESEARCH mode only.
+    // Tools and multi-step loop only for RESEARCH; CHAT and REFLECTION get none.
+    ...(isResearch && {
+      tools: { webSearch: webSearchTool },
+      maxSteps: env.RESEARCH_MAX_STEPS,
+    }),
     onFinish: async (event) => {
       const { inputTokens, outputTokens } = event.usage
       console.log(
         `[jarvis] tokens — in: ${inputTokens ?? '?'} out: ${outputTokens ?? '?'} model: ${env.OPENAI_MODEL}`
       )
+
+      // Safety post-check for RESEARCH: synthesized output may echo PII from
+      // web results — warn and skip memory storage if detected.
+      if (isResearch && event.text && detectPII(event.text)) {
+        console.warn('[jarvis] RESEARCH output contains PII — skipping memory storage')
+        if (onFinish) await onFinish({ text: event.text })
+        return
+      }
 
       // Persist the assistant response as an episodic memory (fire-and-forget).
       if (event.text) {

@@ -10,6 +10,14 @@ const schema = z.object({
   NEXT_PUBLIC_APP_NAME: z.string().default('Jarvis'),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
   NEXT_TELEMETRY_DISABLED: z.string().optional(),
+  BRAVE_SEARCH_API_KEY: z.string().optional(),
+  RESEARCH_MAX_STEPS: z.coerce.number().int().min(1).max(10).default(5),
+  OPENCLAW_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+  OPENCLAW_GATEWAY_URL: z.string().url().default('http://localhost:18789'),
+  OPENCLAW_API_KEY: z.string().optional(),
 })
 
 const parsed = schema.safeParse(process.env)

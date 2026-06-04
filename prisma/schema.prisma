@@ -52,6 +52,21 @@ enum MemoryKind {
   episodic
 }
 
+enum ActionKind {
+  read_only
+  local_mutation
+  external_side_effect
+}
+
+enum AuditStatus {
+  pending
+  auto_approved
+  approved
+  rejected
+  executed
+  failed
+}
+
 model MemoryChunk {
   id        String      @id @default(cuid())
   sessionId String
@@ -66,4 +81,23 @@ model MemoryChunk {
 
   @@index([sessionId])
   @@index([kind])
+}
+
+// Append-only audit trail for every OpenClaw tool invocation.
+// No application-level DELETE is permitted on this table.
+model AuditLog {
+  id             String      @id @default(cuid())
+  sessionId      String?
+  toolName       String
+  actionKind     ActionKind
+  input          Json
+  dryRunOutput   Json?
+  output         Json?
+  status         AuditStatus @default(pending)
+  rejectedReason String?
+  createdAt      DateTime    @default(now())
+  executedAt     DateTime?
+
+  @@index([sessionId])
+  @@index([createdAt(sort: Desc)])
 }
