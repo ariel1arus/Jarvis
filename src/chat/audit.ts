@@ -5,9 +5,8 @@ export type { ActionKind, AuditStatus }
 
 export interface AuditEntry {
   sessionId?: string
-  toolName: string
+  goal: string
   actionKind: ActionKind
-  input: unknown
   status: AuditStatus
   dryRunOutput?: unknown
   output?: unknown
@@ -19,9 +18,8 @@ export async function appendAuditLog(entry: AuditEntry): Promise<string> {
   const row = await prisma.auditLog.create({
     data: {
       sessionId: entry.sessionId ?? null,
-      toolName: entry.toolName,
+      goal: entry.goal,
       actionKind: entry.actionKind,
-      input: entry.input as object,
       status: entry.status,
       dryRunOutput: entry.dryRunOutput != null ? (entry.dryRunOutput as object) : undefined,
       output: entry.output != null ? (entry.output as object) : undefined,
@@ -31,7 +29,7 @@ export async function appendAuditLog(entry: AuditEntry): Promise<string> {
   return row.id
 }
 
-/** Update an existing audit entry (status transitions, output). */
+/** Update an existing audit entry (status transitions and output). */
 export async function patchAuditLog(
   id: string,
   patch: {

@@ -5,7 +5,7 @@ import { createOpenClawClient } from '@/lib/openclaw'
 
 const bodySchema = z.object({
   confirmed: z.boolean(),
-  // Required for external_side_effect: user must type "CONFIRM" to proceed
+  // External side effects require the user to type "CONFIRM" to prevent accidental execution
   confirmationPhrase: z.string().optional(),
 })
 
@@ -27,11 +27,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   const { confirmed, confirmationPhrase } = parsed.data
 
   const log = await getAuditLog(id)
-  if (!log) {
-    return Response.json({ error: 'Audit entry not found' }, { status: 404 })
-  }
+  if (!log) return Response.json({ error: 'Audit entry not found' }, { status: 404 })
   if (log.status !== 'pending') {
-    return Response.json({ error: `Entry is already ${log.status}`, status: log.status }, { status: 409 })
+    return Response.json({ error: `Entry is already ${log.status}` }, { status: 409 })
   }
 
   if (!confirmed) {
@@ -39,7 +37,6 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     return Response.json({ status: 'rejected' })
   }
 
-  // External side effects require the confirmation phrase to prevent accidental clicks
   if (log.actionKind === 'external_side_effect' && confirmationPhrase !== 'CONFIRM') {
     return Response.json(
       { error: 'External side effects require confirmationPhrase: "CONFIRM"' },
@@ -47,11 +44,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     )
   }
 
+  await patchAuditLog(id, { status: 'approved' })
+
   const oclaw = createOpenClawClient()
   try {
-    const output = await oclaw.invoke(log.toolName, log.input as Record<string, unknown>)
-    await patchAuditLog(id, { status: 'executed', output, executedAt: new Date() })
-    return Response.json({ status: 'executed', output })
+    const text = await oclaw.delegate(log.goal)
+    await patchAuditLog(id, { status: 'executed', output: { text }, executedAt: new Date() })
+    return Response.json({ status: 'executed', output: text })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     await patchAuditLog(id, { status: 'failed', rejectedReason: msg })

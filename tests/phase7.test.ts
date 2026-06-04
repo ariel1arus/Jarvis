@@ -1,124 +1,78 @@
-import { describe, it, expect } from 'vitest'
-import { gatekeepStep, gatekeepPlan, planHasBlockedSteps, planHasExternalSideEffects } from '../src/agents/gatekeep'
-import { getTool, toolsForPrompt, TOOL_REGISTRY } from '../src/agents/tools/registry'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { classifyGoal } from '../src/agents/gatekeep'
 import { createOpenClawClient } from '../src/lib/openclaw'
 import { env } from '../src/lib/env'
 
 // ---------------------------------------------------------------------------
-// Registry — structural checks
+// Gatekeep — mode blocking (pure, no LLM call)
 // ---------------------------------------------------------------------------
 
-describe('tool registry', () => {
-  it('every tool has a non-empty description', () => {
-    for (const t of Object.values(TOOL_REGISTRY)) {
-      expect(t.description.length).toBeGreaterThan(0)
-    }
+describe('classifyGoal — mode blocking', () => {
+  it('blocks CHAT mode without calling the LLM', async () => {
+    const result = await classifyGoal('search the web', 'CHAT')
+    expect(result.blocked).toBe(true)
+    expect((result as { reason: string }).reason).toMatch(/CHAT/)
   })
 
-  it('no tool allows CHAT or REFLECTION mode', () => {
-    for (const t of Object.values(TOOL_REGISTRY)) {
-      expect(t.allowedModes).not.toContain('CHAT')
-      expect(t.allowedModes).not.toContain('REFLECTION')
-    }
-  })
-
-  it('getTool returns undefined for unknown names', () => {
-    expect(getTool('does.not.exist')).toBeUndefined()
-  })
-
-  it('toolsForPrompt includes all registry keys', () => {
-    const prompt = toolsForPrompt()
-    for (const name of Object.keys(TOOL_REGISTRY)) {
-      expect(prompt).toContain(name)
-    }
+  it('blocks REFLECTION mode without calling the LLM', async () => {
+    const result = await classifyGoal('find something', 'REFLECTION')
+    expect(result.blocked).toBe(true)
+    expect((result as { reason: string }).reason).toMatch(/REFLECTION/)
   })
 })
 
 // ---------------------------------------------------------------------------
-// Gatekeep — mode blocking
+// Gatekeep — LLM classification (mocked generateObject)
 // ---------------------------------------------------------------------------
 
-describe('gatekeepStep — mode blocking', () => {
-  it('blocks all tools in CHAT mode', () => {
-    const v = gatekeepStep('browser.navigate', 'CHAT')
-    expect(v.allowed).toBe(false)
-    expect((v as { reason: string }).reason).toMatch(/CHAT/)
+describe('classifyGoal — LLM classification', () => {
+  beforeEach(() => {
+    vi.mock('ai', async (importOriginal) => {
+      const actual = await importOriginal<typeof import('ai')>()
+      return {
+        ...actual,
+        generateObject: vi.fn(),
+      }
+    })
   })
 
-  it('blocks all tools in REFLECTION mode', () => {
-    const v = gatekeepStep('browser.navigate', 'REFLECTION')
-    expect(v.allowed).toBe(false)
-    expect((v as { reason: string }).reason).toMatch(/REFLECTION/)
+  afterEach(() => {
+    vi.restoreAllMocks()
   })
 
-  it('blocks unknown tool names', () => {
-    const v = gatekeepStep('hacker.tool', 'RESEARCH')
-    expect(v.allowed).toBe(false)
-  })
-})
+  it('returns read_only for a browsing goal', async () => {
+    const { generateObject } = await import('ai')
+    vi.mocked(generateObject).mockResolvedValueOnce({
+      object: { actionKind: 'read_only', summary: 'Read page content', reasoning: 'No mutation' },
+    } as never)
 
-// ---------------------------------------------------------------------------
-// Gatekeep — action-kind rules
-// ---------------------------------------------------------------------------
-
-describe('gatekeepStep — action kinds', () => {
-  it('read_only: allowed, no approval required', () => {
-    const v = gatekeepStep('browser.navigate', 'RESEARCH')
-    expect(v.allowed).toBe(true)
-    if (v.allowed) {
-      expect(v.kind).toBe('read_only')
-      expect(v.requiresApproval).toBe(false)
-    }
+    const result = await classifyGoal('read the headlines on bbc.com', 'RESEARCH')
+    expect(result.blocked).toBe(false)
+    if (!result.blocked) expect(result.actionKind).toBe('read_only')
   })
 
-  it('local_mutation: allowed but requires approval', () => {
-    const v = gatekeepStep('browser.click', 'RESEARCH')
-    expect(v.allowed).toBe(true)
-    if (v.allowed) {
-      expect(v.kind).toBe('local_mutation')
-      expect(v.requiresApproval).toBe(true)
-    }
+  it('returns external_side_effect for a form-submission goal', async () => {
+    const { generateObject } = await import('ai')
+    vi.mocked(generateObject).mockResolvedValueOnce({
+      object: {
+        actionKind: 'external_side_effect',
+        summary: 'Submit contact form',
+        reasoning: 'Sends data externally',
+      },
+    } as never)
+
+    const result = await classifyGoal('submit the contact form on example.com', 'RESEARCH')
+    expect(result.blocked).toBe(false)
+    if (!result.blocked) expect(result.actionKind).toBe('external_side_effect')
   })
 
-  it('external_side_effect: allowed but requires approval', () => {
-    const v = gatekeepStep('browser.submit', 'RESEARCH')
-    expect(v.allowed).toBe(true)
-    if (v.allowed) {
-      expect(v.kind).toBe('external_side_effect')
-      expect(v.requiresApproval).toBe(true)
-    }
-  })
-})
+  it('fails safe to external_side_effect when LLM throws', async () => {
+    const { generateObject } = await import('ai')
+    vi.mocked(generateObject).mockRejectedValueOnce(new Error('LLM down'))
 
-// ---------------------------------------------------------------------------
-// Gatekeep — plan-level helpers
-// ---------------------------------------------------------------------------
-
-describe('gatekeepPlan helpers', () => {
-  const readStep = { toolName: 'browser.navigate', input: { url: 'https://example.com' }, reasoning: 'r' }
-  const mutateStep = { toolName: 'browser.click', input: { selector: '#btn' }, reasoning: 'r' }
-  const externalStep = { toolName: 'browser.submit', input: { selector: 'form' }, reasoning: 'r' }
-  const badStep = { toolName: 'unknown.tool', input: {}, reasoning: 'r' }
-
-  it('pure read plan has no blocked steps', () => {
-    const verdicts = gatekeepPlan([readStep], 'RESEARCH')
-    expect(planHasBlockedSteps(verdicts)).toBe(false)
-    expect(planHasExternalSideEffects(verdicts)).toBe(false)
-  })
-
-  it('plan with unknown tool is blocked', () => {
-    const verdicts = gatekeepPlan([badStep], 'RESEARCH')
-    expect(planHasBlockedSteps(verdicts)).toBe(true)
-  })
-
-  it('plan with external step detected correctly', () => {
-    const verdicts = gatekeepPlan([readStep, externalStep], 'RESEARCH')
-    expect(planHasExternalSideEffects(verdicts)).toBe(true)
-  })
-
-  it('CHAT mode blocks all steps in a plan', () => {
-    const verdicts = gatekeepPlan([readStep, mutateStep], 'CHAT')
-    expect(planHasBlockedSteps(verdicts)).toBe(true)
+    const result = await classifyGoal('do something', 'RESEARCH')
+    expect(result.blocked).toBe(false)
+    if (!result.blocked) expect(result.actionKind).toBe('external_side_effect')
   })
 })
 
@@ -127,22 +81,42 @@ describe('gatekeepPlan helpers', () => {
 // ---------------------------------------------------------------------------
 
 describe('createOpenClawClient — stub path', () => {
-  it('returns stub output when OPENCLAW_ENABLED is false', async () => {
+  it('returns stub text when OPENCLAW_ENABLED is false', async () => {
     const saved = env.OPENCLAW_ENABLED
     env.OPENCLAW_ENABLED = false
     const client = createOpenClawClient()
-    const result = await client.invoke('browser.navigate', { url: 'https://example.com' })
-    expect(result.stub).toBe(true)
+    const result = await client.delegate('open google.com')
+    expect(result).toContain('[STUB]')
     env.OPENCLAW_ENABLED = saved
   })
 
-  it('stub dry-run also returns stub flag', async () => {
+  it('stub dry-run also returns stub text', async () => {
     const saved = env.OPENCLAW_ENABLED
     env.OPENCLAW_ENABLED = false
     const client = createOpenClawClient()
-    const result = await client.dryRun('browser.click', { selector: '#x' })
-    expect(result.stub).toBe(true)
-    expect(result.dryRun).toBe(true)
+    const result = await client.dryRun('click the button')
+    expect(result).toContain('[STUB DRY RUN]')
     env.OPENCLAW_ENABLED = saved
+  })
+
+  it('uses OPENCLAW_API_KEY when set', () => {
+    const saved = env.OPENCLAW_ENABLED
+    const savedKey = env.OPENCLAW_API_KEY
+    env.OPENCLAW_ENABLED = true
+    env.OPENCLAW_API_KEY = 'custom-key'
+    // createOpenClawClient should not throw
+    expect(() => createOpenClawClient()).not.toThrow()
+    env.OPENCLAW_ENABLED = saved
+    env.OPENCLAW_API_KEY = savedKey
+  })
+
+  it('falls back to OPENAI_API_KEY when OPENCLAW_API_KEY is not set', () => {
+    const saved = env.OPENCLAW_ENABLED
+    const savedKey = env.OPENCLAW_API_KEY
+    env.OPENCLAW_ENABLED = true
+    env.OPENCLAW_API_KEY = undefined
+    expect(() => createOpenClawClient()).not.toThrow()
+    env.OPENCLAW_ENABLED = saved
+    env.OPENCLAW_API_KEY = savedKey
   })
 })

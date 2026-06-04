@@ -1,66 +1,54 @@
-import { getTool, type ActionKind } from './tools/registry'
-import type { PlanStep } from './planner'
+import { generateObject } from 'ai'
+import { openai } from '@ai-sdk/openai'
+import { z } from 'zod'
+import { env } from '@/lib/env'
 
-export type GatekeeperVerdict =
-  | { allowed: true; kind: 'read_only'; requiresApproval: false }
-  | { allowed: true; kind: 'local_mutation' | 'external_side_effect'; requiresApproval: true }
-  | { allowed: false; reason: string }
+export type ActionKind = 'read_only' | 'local_mutation' | 'external_side_effect'
+
+export type GatekeepResult =
+  | { blocked: true; reason: string }
+  | { blocked: false; actionKind: ActionKind; summary: string; reasoning: string }
+
+const ClassificationSchema = z.object({
+  actionKind: z.enum(['read_only', 'local_mutation', 'external_side_effect']),
+  summary: z.string().describe('One sentence: what OpenClaw will do'),
+  reasoning: z.string().describe('Why this classification was chosen'),
+})
+
+const SYSTEM = `Classify a user goal by the highest-risk action it would require to complete.
+
+Categories:
+- read_only: browsing, searching, reading content, taking screenshots. No data sent externally, no accounts touched.
+- local_mutation: interacts with browser UI locally (clicking, typing, navigating) but does NOT submit data to external servers.
+- external_side_effect: sends data externally — submitting forms, purchasing, sending messages/emails, creating/deleting accounts, uploading files, or any externally-visible change.
+
+Be conservative: when unsure between two categories, choose the higher-risk one.`
 
 /**
- * Checks a single tool call against the mode gate and action-kind rules.
- *
- * Hard rules:
- * - CHAT and REFLECTION: all OpenClaw tools blocked unconditionally.
- * - Unknown tool: blocked.
- * - Mode not in tool's allowedModes: blocked.
- * - read_only: auto-approved.
- * - local_mutation: requires user approval + dry-run.
- * - external_side_effect: requires explicit user approval + dry-run; never auto-executed.
+ * Classifies a goal and enforces the mode gate.
+ * CHAT and REFLECTION are hard-blocked — no LLM call is made for them.
  */
-export function gatekeepStep(toolName: string, mode: string): GatekeeperVerdict {
+export async function classifyGoal(goal: string, mode: string): Promise<GatekeepResult> {
   if (mode === 'CHAT' || mode === 'REFLECTION') {
-    return { allowed: false, reason: `OpenClaw tools are not available in ${mode} mode.` }
+    return { blocked: true, reason: `Action delegation is not available in ${mode} mode.` }
   }
 
-  const tool = getTool(toolName)
-  if (!tool) {
-    return { allowed: false, reason: `Unknown tool: "${toolName}". Check the tool registry.` }
-  }
-
-  if (!(tool.allowedModes as string[]).includes(mode)) {
+  try {
+    const { object } = await generateObject({
+      model: openai(env.OPENAI_MODEL),
+      schema: ClassificationSchema,
+      system: SYSTEM,
+      prompt: goal,
+      maxRetries: 2,
+    })
+    return { blocked: false, ...object }
+  } catch {
+    // Fail safe: treat classification failures as external_side_effect (highest gate)
     return {
-      allowed: false,
-      reason: `Tool "${toolName}" is not available in ${mode} mode. Allowed: ${tool.allowedModes.join(', ')}.`,
+      blocked: false,
+      actionKind: 'external_side_effect',
+      summary: goal,
+      reasoning: 'Classification failed — defaulting to highest-risk category.',
     }
   }
-
-  const kind: ActionKind = tool.kind
-
-  if (kind === 'read_only') {
-    return { allowed: true, kind: 'read_only', requiresApproval: false }
-  }
-
-  return { allowed: true, kind, requiresApproval: true }
-}
-
-export interface StepVerdict {
-  step: PlanStep
-  verdict: GatekeeperVerdict
-}
-
-/** Gate an entire plan. Returns verdicts in step order. */
-export function gatekeepPlan(steps: PlanStep[], mode: string): StepVerdict[] {
-  return steps.map((step) => ({ step, verdict: gatekeepStep(step.toolName, mode) }))
-}
-
-/** True when the plan has at least one blocked step. */
-export function planHasBlockedSteps(verdicts: StepVerdict[]): boolean {
-  return verdicts.some((v) => !v.verdict.allowed)
-}
-
-/** True when any step is an external side effect (highest-risk category). */
-export function planHasExternalSideEffects(verdicts: StepVerdict[]): boolean {
-  return verdicts.some(
-    (v) => v.verdict.allowed && v.verdict.kind === 'external_side_effect'
-  )
 }

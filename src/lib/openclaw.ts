@@ -1,59 +1,68 @@
 import { env } from '@/lib/env'
 
-export type OpenClawInput = Record<string, unknown>
-export type OpenClawOutput = Record<string, unknown>
-
 export interface OpenClawClient {
-  invoke(tool: string, input: OpenClawInput): Promise<OpenClawOutput>
-  dryRun(tool: string, input: OpenClawInput): Promise<OpenClawOutput>
+  /** Delegate a goal to OpenClaw's AI brain for full autonomous execution. */
+  delegate(goal: string): Promise<string>
+  /** Ask OpenClaw to describe what it would do without executing anything. */
+  dryRun(goal: string): Promise<string>
 }
+
+type ChatMessage = { role: 'user' | 'system' | 'assistant'; content: string }
 
 class HttpOpenClawClient implements OpenClawClient {
   constructor(
     private readonly base: string,
-    private readonly key: string | undefined
+    private readonly key: string,
+    private readonly model: string
   ) {}
 
-  private headers(): Record<string, string> {
-    const h: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (this.key) h['Authorization'] = `Bearer ${this.key}`
-    return h
+  private async chat(messages: ChatMessage[]): Promise<string> {
+    const res = await fetch(`${this.base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.key}`,
+      },
+      body: JSON.stringify({ model: this.model, messages }),
+      // Autonomous execution can take time — 2-minute timeout
+      signal: AbortSignal.timeout(120_000),
+    })
+    if (!res.ok) throw new Error(`OpenClaw request failed: HTTP ${res.status}`)
+    const data = (await res.json()) as {
+      choices?: Array<{ message?: { content?: string } }>
+    }
+    return data.choices?.[0]?.message?.content ?? ''
   }
 
-  async invoke(tool: string, input: OpenClawInput): Promise<OpenClawOutput> {
-    const res = await fetch(`${this.base}/tools/invoke`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ tool, input, dryRun: false }),
-      signal: AbortSignal.timeout(30_000),
-    })
-    if (!res.ok) throw new Error(`OpenClaw invoke failed: HTTP ${res.status}`)
-    return res.json() as Promise<OpenClawOutput>
+  async delegate(goal: string): Promise<string> {
+    return this.chat([{ role: 'user', content: goal }])
   }
 
-  async dryRun(tool: string, input: OpenClawInput): Promise<OpenClawOutput> {
-    const res = await fetch(`${this.base}/tools/invoke`, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify({ tool, input, dryRun: true }),
-      signal: AbortSignal.timeout(15_000),
-    })
-    if (!res.ok) throw new Error(`OpenClaw dry-run failed: HTTP ${res.status}`)
-    return res.json() as Promise<OpenClawOutput>
+  async dryRun(goal: string): Promise<string> {
+    return this.chat([
+      {
+        role: 'system',
+        content:
+          'DRY RUN MODE: Describe in detail what steps you would take and what external interactions ' +
+          'would occur. Do NOT execute any actions, submit any forms, send any data, or open any URLs.',
+      },
+      { role: 'user', content: goal },
+    ])
   }
 }
 
-// Returned when OPENCLAW_ENABLED=false — safe to use in tests and dev.
 class StubOpenClawClient implements OpenClawClient {
-  async invoke(tool: string, input: OpenClawInput): Promise<OpenClawOutput> {
-    return { stub: true, tool, input, note: 'OPENCLAW_ENABLED is false' }
+  async delegate(goal: string): Promise<string> {
+    return `[STUB] OpenClaw disabled. Would have executed: ${goal}`
   }
-  async dryRun(tool: string, input: OpenClawInput): Promise<OpenClawOutput> {
-    return { stub: true, tool, input, dryRun: true, note: 'OPENCLAW_ENABLED is false' }
+  async dryRun(goal: string): Promise<string> {
+    return `[STUB DRY RUN] OpenClaw disabled. Would preview: ${goal}`
   }
 }
 
 export function createOpenClawClient(): OpenClawClient {
   if (!env.OPENCLAW_ENABLED) return new StubOpenClawClient()
-  return new HttpOpenClawClient(env.OPENCLAW_GATEWAY_URL, env.OPENCLAW_API_KEY)
+  // Use OPENCLAW_API_KEY if set, otherwise fall back to the same OpenAI key
+  const key = env.OPENCLAW_API_KEY ?? env.OPENAI_API_KEY
+  return new HttpOpenClawClient(env.OPENCLAW_GATEWAY_URL, key, env.OPENAI_MODEL)
 }

@@ -88,9 +88,8 @@ model MemoryChunk {
 model AuditLog {
   id             String      @id @default(cuid())
   sessionId      String?
-  toolName       String
+  goal           String      @db.Text
   actionKind     ActionKind
-  input          Json
   dryRunOutput   Json?
   output         Json?
   status         AuditStatus @default(pending)

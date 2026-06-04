@@ -1,8 +1,7 @@
 import { type NextRequest } from 'next/server'
 import { z } from 'zod'
 import { MODES } from '@/lib/types'
-import { planGoal } from '@/agents/planner'
-import { gatekeepPlan, planHasBlockedSteps } from '@/agents/gatekeep'
+import { classifyGoal } from '@/agents/gatekeep'
 import { appendAuditLog, patchAuditLog } from '@/chat/audit'
 import { createOpenClawClient } from '@/lib/openclaw'
 
@@ -12,7 +11,6 @@ const bodySchema = z.object({
   mode: z.enum(MODES),
 })
 
-// CHAT and REFLECTION may never trigger this route.
 const BLOCKED_MODES = new Set(['CHAT', 'REFLECTION'])
 
 export async function POST(req: NextRequest) {
@@ -31,92 +29,66 @@ export async function POST(req: NextRequest) {
   const { goal, sessionId, mode } = parsed.data
 
   if (BLOCKED_MODES.has(mode)) {
-    return Response.json(
-      { error: `Actions are not available in ${mode} mode.` },
-      { status: 403 }
-    )
+    return Response.json({ error: `Action delegation is not available in ${mode} mode.` }, { status: 403 })
   }
 
-  // 1 — Plan
-  let plan
-  try {
-    plan = await planGoal(goal)
-  } catch (err) {
-    console.error('[actions] planner failed', err)
-    return Response.json({ error: 'Planning failed. Try rephrasing your goal.' }, { status: 502 })
-  }
-
-  // 2 — Gate every step
-  const verdicts = gatekeepPlan(plan.steps, mode)
-
-  if (planHasBlockedSteps(verdicts)) {
-    const blocked = verdicts
-      .filter((v) => !v.verdict.allowed)
-      .map((v) => ({ toolName: v.step.toolName, reason: (v.verdict as { reason: string }).reason }))
-    return Response.json({ error: 'Plan contains disallowed actions', blocked }, { status: 403 })
+  // Classify the goal — determines approval tier
+  const classification = await classifyGoal(goal, mode)
+  if (classification.blocked) {
+    return Response.json({ error: classification.reason }, { status: 403 })
   }
 
   const oclaw = createOpenClawClient()
-  const results = []
 
-  for (const { step, verdict } of verdicts) {
-    if (!verdict.allowed) continue // already handled above
+  if (classification.actionKind === 'read_only') {
+    // Auto-approve: log → execute → update log
+    const auditId = await appendAuditLog({
+      sessionId,
+      goal,
+      actionKind: 'read_only',
+      status: 'auto_approved',
+    })
 
-    if (verdict.kind === 'read_only') {
-      // Auto-approve: log → execute → update log
-      const auditId = await appendAuditLog({
-        sessionId,
-        toolName: step.toolName,
-        actionKind: 'read_only',
-        input: step.input,
-        status: 'auto_approved',
-      })
-
-      let output: Record<string, unknown>
-      try {
-        output = await oclaw.invoke(step.toolName, step.input)
-        await patchAuditLog(auditId, { status: 'executed', output, executedAt: new Date() })
-        results.push({ auditId, toolName: step.toolName, kind: 'read_only', status: 'executed', output })
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        await patchAuditLog(auditId, { status: 'failed', rejectedReason: msg })
-        results.push({ auditId, toolName: step.toolName, kind: 'read_only', status: 'failed', error: msg })
-      }
-    } else {
-      // local_mutation or external_side_effect: dry-run then await approval
-      let dryRunOutput: Record<string, unknown> | undefined
-      try {
-        dryRunOutput = await oclaw.dryRun(step.toolName, step.input)
-      } catch {
-        dryRunOutput = { note: 'Dry-run unavailable' }
-      }
-
-      const auditId = await appendAuditLog({
-        sessionId,
-        toolName: step.toolName,
-        actionKind: verdict.kind,
-        input: step.input,
-        status: 'pending',
-        dryRunOutput,
-      })
-
-      results.push({
-        auditId,
-        toolName: step.toolName,
-        kind: verdict.kind,
-        status: 'pending',
-        dryRunOutput,
-        warning:
-          verdict.kind === 'external_side_effect'
-            ? 'This action sends data to an external server. Explicit confirmation required.'
-            : 'This action modifies local state. Confirm to proceed.',
-      })
+    try {
+      const text = await oclaw.delegate(goal)
+      await patchAuditLog(auditId, { status: 'executed', output: { text }, executedAt: new Date() })
+      return Response.json({ auditId, status: 'executed', summary: classification.summary, output: text })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      await patchAuditLog(auditId, { status: 'failed', rejectedReason: msg })
+      return Response.json({ auditId, status: 'failed', error: msg }, { status: 502 })
     }
   }
 
-  return Response.json({
-    summary: plan.summary,
+  // local_mutation or external_side_effect: dry-run first, then await explicit approval
+  let dryRunText = ''
+  try {
+    dryRunText = await oclaw.dryRun(goal)
+  } catch {
+    dryRunText = 'Dry-run preview unavailable.'
+  }
+
+  const auditId = await appendAuditLog({
     sessionId,
-    results,
+    goal,
+    actionKind: classification.actionKind,
+    status: 'pending',
+    dryRunOutput: { text: dryRunText },
+  })
+
+  return Response.json({
+    auditId,
+    status: 'pending',
+    summary: classification.summary,
+    actionKind: classification.actionKind,
+    dryRunPreview: dryRunText,
+    nextStep:
+      classification.actionKind === 'external_side_effect'
+        ? 'POST /api/actions/:auditId/approve with { confirmed: true, confirmationPhrase: "CONFIRM" }'
+        : 'POST /api/actions/:auditId/approve with { confirmed: true }',
+    warning:
+      classification.actionKind === 'external_side_effect'
+        ? 'This action will send data to an external server and cannot be undone.'
+        : 'This action will modify local state.',
   })
 }
