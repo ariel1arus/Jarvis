@@ -28,8 +28,28 @@ services:
       timeout: 5s
       retries: 5
 
+  openclaw:
+    image: openclaw/openclaw:latest
+    restart: unless-stopped
+    # CPU-only — no GPU needed for Phase 7
+    ports:
+      - "127.0.0.1:18789:18789"
+    environment:
+      OPENCLAW_GATEWAY_PORT: 18789
+      # OpenClaw uses this key for its own LLM reasoning
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+    volumes:
+      - openclaw_data:/root/.openclaw
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18789/v1/models || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
 volumes:
   jarvis_postgres_data:
     external: true
     name: ai-procjets_jarvis_postgres_data
   postgres_test_data:
+  openclaw_data:
