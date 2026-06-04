@@ -40,12 +40,51 @@ phase lists **Goal, Deliverables, Acceptance Criteria, Owner, Dependencies, Risk
 - **Acceptance:** retrieval returns ranked, token-budgeted chunks **injected into the system prompt only**; eviction removes stale chunks; user can view/delete memories.
 - **Owner:** BE (schema) + AI (retrieval) + FE (UI) · **Deps:** Phase 2, 3 · **Risks:** embedding cost/leakage; no injection point today; unbounded growth without TTL.
 
-## Phase 5 — Reflection Mode (Safety ships here)
+## Phase 5 — Reflection Mode
 
-- **Goal:** Ship Reflection with non-bypassable guardrails — **safety pre-check is a prerequisite, not a follow-up.**
-- **Deliverables:** `src/lib/safety.ts` (`sanitiseForModel`, `detectPII`, `redactForExternal`); `src/agents/safety.ts`; egress projection + boundary unit test; rate limiting on reflection; mood extraction **opt-in, default OFF**; Reflection titles default to `"Reflection — {date}"`; system-prompt privacy claim corrected.
-- **Acceptance:** REFLECTION receives **zero tools** structurally; distress-signal pre-check runs before every Reflection turn; boundary test proves only `{role, content}` egresses; mood is never recorded unless opted in.
-- **Owner:** SAFE + AI · **Deps:** Phase 3 · **Risks:** prompt-layer steering mistaken for a guarantee; **"safety (Phase 6)" comment ordering bug** — safety must ship before Reflection prod.
+- **Goal:** Ship a safe but useful Reflection Mode for emotional support, journaling, and guided self-reflection.
+
+- **Deliverables:**
+  - `src/agents/reflection.ts`
+  - `src/agents/safety.ts`
+  - `src/lib/safety.ts`
+  - Reflection system prompt
+  - Reflection disclaimer
+  - Optional mood check-in
+  - Optional mood tracking setting
+  - Reflection session titles: `"Reflection — {date}"`
+
+- **Allowed behavior:**
+  - Ask reflective questions
+  - Help organize thoughts
+  - Suggest journaling prompts
+  - Suggest grounding/breathing exercises
+  - Remember previous user-approved context
+  - Track mood only if enabled
+  - Encourage talking to a real professional when appropriate
+
+- **Blocked behavior:**
+  - No diagnosis
+  - No medication advice
+  - No pretending to be a licensed therapist
+  - No external tools/actions in Reflection Mode
+  - No confident body-language/emotion claims
+  - No storing mood data unless enabled
+
+- **Safety flow:**
+  - Run lightweight safety check before every Reflection response.
+  - If distress indicators appear, respond supportively and suggest real-world support.
+  - Safety should guide the response, not make the mode feel robotic.
+
+- **Acceptance:**
+  - Reflection Mode has no external action tools.
+  - Mood tracking is opt-in.
+  - Reflection responses are warm, helpful, and non-clinical.
+  - The agent does not diagnose or prescribe.
+  - The user can still have natural emotional conversations.
+
+- **Owner:** SAFE + AI
+- **Deps:** Phase 3
 
 ## Phase 6 — Research Tools
 

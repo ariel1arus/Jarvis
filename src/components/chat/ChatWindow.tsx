@@ -6,6 +6,8 @@ import { MODE_LABELS, MODE_COLORS } from '@/lib/types'
 import { useStreamingChat, type ChatMessage } from '@/hooks/useStreamingChat'
 import { MessageBubble, ThinkingBubble } from './MessageBubble'
 import { InputBar } from './InputBar'
+import { ReflectionDisclaimer } from './ReflectionDisclaimer'
+import { MoodCheckIn } from './MoodCheckIn'
 
 interface ChatWindowProps {
   sessionId: string
@@ -40,6 +42,7 @@ export function ChatWindow({ sessionId, mode, initialMessages }: ChatWindowProps
       </div>
 
       <div className="flex-1 overflow-y-auto">
+        <ReflectionDisclaimer mode={mode} />
         <div className="max-w-2xl mx-auto px-4 py-6 flex flex-col gap-5">
           {messages.length === 0 && (
             <div className="text-center text-zinc-600 text-sm mt-16">
@@ -54,6 +57,7 @@ export function ChatWindow({ sessionId, mode, initialMessages }: ChatWindowProps
         </div>
       </div>
 
+      <MoodCheckIn mode={mode} />
       <InputBar
         input={input}
         isLoading={isLoading}

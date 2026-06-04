@@ -20,6 +20,13 @@ export function InputBar({ input, isLoading, onInputChange, onSubmit }: InputBar
     el.style.height = `${Math.min(el.scrollHeight, 200)}px`
   }, [input])
 
+  // Restore focus when the AI finishes responding
+  useEffect(() => {
+    if (!isLoading) {
+      textareaRef.current?.focus()
+    }
+  }, [isLoading])
+
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
