@@ -4,4 +4,4 @@ export type { ChatSession, Message }
 
 export type SessionWithMessages = ChatSession & { messages: Message[] }
 
-export type SessionSummary = ChatSession & { messages: [Message] | [] }
+export type SessionSummary = ChatSession & { messages: Message[] }

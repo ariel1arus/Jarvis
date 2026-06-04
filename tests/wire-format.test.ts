@@ -44,6 +44,7 @@ import { describe, it, expect } from 'vitest'
 import { streamText } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 import { convertArrayToReadableStream } from '@ai-sdk/provider-utils/test'
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider'
 
 // ---------------------------------------------------------------------------
 // Helper: collect all chunks from a Response body stream as decoded strings.
@@ -88,29 +89,27 @@ describe('toTextStreamResponse() wire format', () => {
    * A finish part is required to close the stream cleanly.
    */
   function buildMockModel(tokens: string[]) {
-    const streamParts = [
-      // text-start signals that a new text block is beginning
-      { type: 'text-start' as const, id: 'text-1' },
-      // text-delta parts carry the actual token strings
-      ...tokens.map((delta) => ({
-        type: 'text-delta' as const,
+    const streamParts: LanguageModelV3StreamPart[] = [
+      { type: 'text-start', id: 'text-1' },
+      ...tokens.map((delta): LanguageModelV3StreamPart => ({
+        type: 'text-delta',
         id: 'text-1',
         delta,
       })),
-      // text-end closes the text block
-      { type: 'text-end' as const, id: 'text-1' },
-      // finish is required by streamText to resolve onFinish / fullStream
+      { type: 'text-end', id: 'text-1' },
       {
-        type: 'finish' as const,
-        finishReason: 'stop' as const,
-        usage: { inputTokens: 1, outputTokens: tokens.length },
+        type: 'finish',
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: undefined, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: tokens.length, text: undefined, reasoning: undefined },
+        },
       },
     ]
 
     return new MockLanguageModelV3({
       doStream: async () => ({
         stream: convertArrayToReadableStream(streamParts),
-        rawCall: { rawPrompt: null, rawSettings: {} },
         request: { body: '' },
       }),
     })

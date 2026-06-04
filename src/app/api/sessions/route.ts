@@ -7,8 +7,9 @@ const createSchema = z.object({
   title: z.string().max(120).optional(),
 })
 
-export async function GET() {
-  const sessions = await listSessions()
+export async function GET(req: NextRequest) {
+  const cursor = req.nextUrl.searchParams.get('cursor') ?? undefined
+  const sessions = await listSessions(cursor)
   return Response.json(sessions)
 }
 

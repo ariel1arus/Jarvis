@@ -47,19 +47,28 @@ model Message {
 
 ---
 
-## 2. Recommended Changes (REQUIRED before Phase 2)
+## 2. Phase 2 Changes (shipped)
 
-| Change | Reason |
+| Change | Status |
 |--------|--------|
-| Add `Role` enum (`user`, `assistant`, `system`, `tool`) and type `Message.role` as `Role` | `Message.role` is currently an unconstrained `String` — invalid roles can be persisted and later break the model call. **Top-5 risk.** |
-| `@@index([sessionId])` on `Message` | Every history read filters by `sessionId`; no index today |
-| `@@index([updatedAt(sort: Desc)])` on `ChatSession` | `listSessions` orders by `updatedAt desc` |
-| Fix `SessionSummary` type | Currently `SessionSummary` and `SessionWithMessages` are **structurally identical** (`ChatSession & { messages: Message[] }`). Make `SessionSummary = ChatSession & { messages: [Message] \| [] }` (zero-or-one preview message) |
+| `Role` enum + `Message.role: Role` | ✅ Migrated (Phase 1) |
+| `@@index([sessionId])` on `Message` | ✅ Migrated (Phase 1) |
+| `@@index([updatedAt(sort: Desc)])` on `ChatSession` | ✅ Migrated (Phase 1) |
+| `PATCH /api/sessions/:id` (rename + mode change) | ✅ Added (Phase 2) |
+| `SessionSummary` type fix — `messages: Message[]` | ✅ Fixed (Phase 2) |
+| Cursor pagination in `listSessions` | ✅ Added (Phase 2) |
+| Last-message preview in session list | ✅ Added (Phase 2) |
+| `jarvis_test` Docker service for integration tests | ✅ Added (Phase 1) |
+| Integration tests for all `history.ts` functions | ✅ Added (Phase 2) |
 
-> **Migration note (QA):** `Message.role` is live data typed as free-text. Adding the
-> `Role` enum requires a data-backfill/validation step: confirm all existing rows hold one
-> of the four enum values before the column type change, or the migration will fail. Decide
-> the soft-delete policy (below) **before** writing this migration.
+### Soft-delete decision (Phase 2)
+
+**Decision: hard delete.** `deleteSession` issues a `DELETE` and Prisma's `onDelete: Cascade`
+on `Message.session` handles orphan cleanup. No `deletedAt` column will be added.
+
+**Rationale:** there is no user model or multi-user scenario yet; data recovery is not a stated
+requirement; and soft-delete adds complexity (every query must filter `deletedAt IS NULL`).
+Revisit this decision when a user identity model and data-export requirement land (Phase 10).
 
 ---
 
@@ -95,13 +104,11 @@ model Message {
 
 - **`createSession(mode, title)`** — insert with defaults.
 - **`getSession(id)`** — include all messages `orderBy createdAt asc`.
-- **`listSessions()`** — `take: 50`, ordered `updatedAt desc`, includes a single preview message.
-  - **Fix:** it currently includes the **first** message (`take: 1, orderBy createdAt asc`). It should include the **last** message for a useful preview.
-  - **Fix (QA):** replace the hard `take: 50` cap with **cursor pagination**.
+- **`listSessions(cursor?, take?)`** — default `take: 50`, ordered `updatedAt desc`, includes a single preview message (last by `createdAt`). Cursor pagination: pass the `id` of the last returned session to get the next page.
 - **`appendMessage(sessionId, role, content)`** — runs in a **`$transaction`**: insert `Message` **and** manually bump `ChatSession.updatedAt`. The manual bump is required because **`@updatedAt` on the parent does not propagate from a child write**.
-- **`updateSessionTitle(sessionId, title)`** — used by auto-title and the future PATCH route.
-- **`deleteSession(id)`** — cascades to messages.
-  - **Fix (QA):** a missing id throws Prisma `P2025`, which currently surfaces as a **500**. Catch `P2025` and return **404**. Decide whether delete is **hard** or **soft** (a `deletedAt` column) before Phase 2 migrations.
+- **`updateSession(sessionId, { title?, mode? })`** — renames or changes the mode; used by the `PATCH /api/sessions/:id` route.
+- **`updateSessionTitle(sessionId, title)`** — thin wrapper kept for auto-title use; delegates to `updateSession`.
+- **`deleteSession(id)`** — hard delete (see soft-delete decision above). Cascades to messages. Throws `P2025` on missing id; the route handler converts that to 404.
 
 **Ordering correctness:** writes within a session must remain causally ordered.
 `createdAt` defaults to `now()` at insert time; under a single-user load this is sufficient,

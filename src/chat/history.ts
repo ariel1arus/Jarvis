@@ -2,6 +2,8 @@ import { prisma } from '@/lib/prisma'
 import type { Role } from '@/generated/prisma/client'
 import type { Mode } from '@/lib/types'
 
+const SESSION_PAGE_SIZE = 50
+
 export async function createSession(mode: Mode, title = 'New conversation') {
   return prisma.chatSession.create({
     data: { mode, title },
@@ -15,14 +17,19 @@ export async function getSession(id: string) {
   })
 }
 
-export async function listSessions() {
+export async function listSessions(cursor?: string, take = SESSION_PAGE_SIZE) {
   return prisma.chatSession.findMany({
     orderBy: { updatedAt: 'desc' },
-    take: 50,
+    take,
+    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
     include: {
       messages: { take: 1, orderBy: { createdAt: 'desc' } },
     },
   })
+}
+
+export async function updateSession(id: string, updates: { title?: string; mode?: Mode }) {
+  return prisma.chatSession.update({ where: { id }, data: updates })
 }
 
 export async function appendMessage(sessionId: string, role: Role, content: string) {
