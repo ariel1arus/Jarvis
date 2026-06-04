@@ -43,6 +43,15 @@ export default async function Home() {
             </div>
           </div>
         )}
+
+        <div className="w-full flex justify-center">
+          <Link
+            href="/memory"
+            className="text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
+          >
+            Memory
+          </Link>
+        </div>
       </div>
     </div>
   )

@@ -23,23 +23,47 @@ enum Role {
 }
 
 model ChatSession {
-  id        String    @id @default(cuid())
-  title     String    @default("New conversation")
-  mode      Mode      @default(CHAT)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
-  messages  Message[]
+  id           String        @id @default(cuid())
+  title        String        @default("New conversation")
+  mode         Mode          @default(CHAT)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  messages     Message[]
+  memoryChunks MemoryChunk[]
 
   @@index([updatedAt(sort: Desc)])
 }
 
 model Message {
+  id           String        @id @default(cuid())
+  sessionId    String
+  session      ChatSession   @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  role         Role
+  content      String
+  createdAt    DateTime      @default(now())
+  memoryChunks MemoryChunk[]
+
+  @@index([sessionId])
+}
+
+enum MemoryKind {
+  short_term
+  long_term
+  episodic
+}
+
+model MemoryChunk {
   id        String      @id @default(cuid())
   sessionId String
   session   ChatSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  role      Role
-  content   String
+  messageId String?
+  message   Message?    @relation(fields: [messageId], references: [id], onDelete: SetNull)
+  kind      MemoryKind
+  content   String      @db.Text
+  embedding Unsupported("vector(1536)")
   createdAt DateTime    @default(now())
+  expiresAt DateTime?
 
   @@index([sessionId])
+  @@index([kind])
 }

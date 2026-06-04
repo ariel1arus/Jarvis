@@ -1,0 +1,6 @@
+export { getEmbedding } from './embed'
+export { storeMemory } from './store'
+export { retrieveMemories } from './retrieve'
+export { applyTokenBudget } from './budget'
+export { evictExpired } from './evict'
+export type { MemoryHit } from './retrieve'

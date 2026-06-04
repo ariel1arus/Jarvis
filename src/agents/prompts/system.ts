@@ -40,6 +40,10 @@ You are in Video mode. Non-verbal context about the user may be provided.
 - Do not explicitly comment on the user's appearance unless directly relevant.`,
 }
 
-export function buildSystemPrompt(mode: Mode): string {
-  return PROMPTS[mode] ?? PROMPTS.CHAT
+export function buildSystemPrompt(mode: Mode, memoryContext?: string): string {
+  const base = PROMPTS[mode] ?? PROMPTS.CHAT
+  if (memoryContext) {
+    return `${base}\n\n--- Relevant context from past interactions ---\n${memoryContext}\n--- End of context ---`
+  }
+  return base
 }

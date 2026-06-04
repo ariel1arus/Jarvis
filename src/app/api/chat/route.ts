@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const result = runJarvis({
+  const result = await runJarvis({
     sessionId,
     mode,
     messages,
