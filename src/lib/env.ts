@@ -17,6 +17,7 @@ const schema = z.object({
     .optional()
     .transform((v) => v === 'true' || v === '1'),
   OPENCLAW_GATEWAY_URL: z.string().url().default('http://localhost:18789'),
+  OPENCLAW_GATEWAY_TOKEN: z.string().optional(),
   OPENCLAW_API_KEY: z.string().optional(),
 })
 

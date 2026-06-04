@@ -29,23 +29,29 @@ services:
       retries: 5
 
   openclaw:
-    image: openclaw/openclaw:latest
+    build:
+      context: ./docker/openclaw
+      dockerfile: Dockerfile
     restart: unless-stopped
     # CPU-only — no GPU needed for Phase 7
+    # Host port is loopback-only; container binds lan internally (--bind lan)
     ports:
       - "127.0.0.1:18789:18789"
+    # .env.local is read by Next.js; docker-compose reads it here so the
+    # OPENAI_API_KEY reaches the container without a separate secrets file.
+    env_file:
+      - .env.local
     environment:
       OPENCLAW_GATEWAY_PORT: 18789
-      # OpenClaw uses this key for its own LLM reasoning
-      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENCLAW_GATEWAY_TOKEN: jarvis-oclaw-2026
     volumes:
-      - openclaw_data:/root/.openclaw
+      - openclaw_data:/home/node/.openclaw
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:18789/v1/models || exit 1"]
+      test: ["CMD-SHELL", "curl -sf http://localhost:18789/healthz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s
+      start_period: 30s
 
 volumes:
   jarvis_postgres_data:

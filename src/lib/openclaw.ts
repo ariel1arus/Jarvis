@@ -62,7 +62,7 @@ class StubOpenClawClient implements OpenClawClient {
 
 export function createOpenClawClient(): OpenClawClient {
   if (!env.OPENCLAW_ENABLED) return new StubOpenClawClient()
-  // Use OPENCLAW_API_KEY if set, otherwise fall back to the same OpenAI key
-  const key = env.OPENCLAW_API_KEY ?? env.OPENAI_API_KEY
+  // Gateway auth token takes priority; fall back to OPENCLAW_API_KEY, then OPENAI_API_KEY
+  const key = env.OPENCLAW_GATEWAY_TOKEN ?? env.OPENCLAW_API_KEY ?? env.OPENAI_API_KEY
   return new HttpOpenClawClient(env.OPENCLAW_GATEWAY_URL, key, env.OPENAI_MODEL)
 }
